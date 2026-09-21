@@ -1,16 +1,10 @@
 {
-  "name": "Zangetsu Providers",
-  "description": "Streaming sources for the Zangetsu app.",
-  "sources": [
-    {
-      "id": "flixlatam",
-      "name": "FlixLatam",
-      "version": "1.0.0",
-      "type": "anime",
-      "lang": "es",
-      "file": "providers/flixlatam.js",
-      "logo": "https://flixlatam.com/themes/dooplay/assets/img/favicon.png",
-      "nsfw": false
-    }
-  ]
+  "id": "flixlatam",
+  "name": "FlixLatam",
+  "version": "1.0.0",
+  "type": "anime",
+  "lang": "es",
+  "file": "providers/flixlatam.js",
+  "logo": "https://flixlatam.com/themes/dooplay/assets/img/favicon.png",
+  "nsfw": false
 }
