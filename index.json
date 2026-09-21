@@ -1,1 +1,16 @@
-
+{
+  "name": "Zangetsu Anime Providers",
+  "description": "Anime streaming sources for Zangetsu.",
+  "sources": [
+    {
+      "id": "animeav1",
+      "name": "AnimeAV1",
+      "version": "1.0.0",
+      "type": "anime",
+      "lang": "es",
+      "file": "providers/animeav.js",
+      "logo": "https://animeav1.com/favicon.png",
+      "nsfw": false
+    }
+  ]
+}
