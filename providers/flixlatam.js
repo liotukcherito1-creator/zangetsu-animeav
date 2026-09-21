@@ -1,24 +1,11 @@
-// ============================================================
 // FlixLatam — Zangetsu Provider
 // https://flixlatam.com/
 //
 // Adaptado desde el módulo Sora de FlixLatam.
-//
-// Funciones:
-//   - Catálogo
-//   - Búsqueda
-//   - Detalles
-//   - Episodios
-//   - Extracción de HLS directamente expuesto
-//
-// ============================================================
-
-var SOURCE_ID =
-  (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
-    ? String(__SOURCE_ID)
-    : 'flixlatam';
+// No incluye la resolución de embeds protegidos mediante PoW/AES/Altcha.
 
 var SITE = 'https://flixlatam.com';
+var SOURCE_ID = 'flixlatam';
 
 var UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
@@ -46,17 +33,14 @@ function getInfo() {
 // HTTP
 // ============================================================
 
-function request(url, referer) {
-
+function fetchPage(url, referer) {
   return fetch(url, {
     headers: {
       'User-Agent': UA,
       'Referer': referer || SITE + '/'
     }
   }).then(function (response) {
-
     return response.body || '';
-
   });
 }
 
@@ -65,45 +49,37 @@ function request(url, referer) {
 // HELPERS
 // ============================================================
 
-function absUrl(url) {
-
-  if (!url) {
-    return null;
-  }
+function absoluteUrl(url) {
+  if (!url) return '';
 
   url = String(url).trim();
-
-  if (url.indexOf('//') === 0) {
-    return 'https:' + url;
-  }
 
   if (/^https?:\/\//i.test(url)) {
     return url;
   }
 
-  if (url.charAt(0) === '/') {
-    return SITE + url;
+  if (/^\/\//.test(url)) {
+    return 'https:' + url;
   }
 
-  return SITE + '/' + url;
+  return SITE + (
+    url.charAt(0) === '/'
+      ? url
+      : '/' + url
+  );
 }
 
 
 function cleanText(text) {
-
-  if (!text) {
-    return '';
-  }
+  if (!text) return '';
 
   return String(text)
     .replace(/<br\s*\/?>/gi, ' ')
     .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#039;/gi, "'")
+    .replace(/&apos;/gi, "'")
     .replace(/&amp;/gi, '&')
     .replace(/&quot;/gi, '"')
-    .replace(/&#039;/gi, "'")
-    .replace(/&#39;/gi, "'")
-    .replace(/&#x27;/gi, "'")
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/\s+/g, ' ')
@@ -111,93 +87,99 @@ function cleanText(text) {
 }
 
 
-function decodeEntities(text) {
-  return cleanText(text);
-}
+// ============================================================
+// SEARCH
+// ============================================================
 
+function search(query, page, options) {
 
-function extractTitle(html) {
+  var q = String(query || '').trim();
 
-  var match;
-
-  match = html.match(
-    /<h1[^>]*>([\s\S]*?)<\/h1>/i
-  );
-
-  if (match) {
-    return cleanText(match[1]);
+  if (!q) {
+    return Promise.resolve([]);
   }
 
-  match = html.match(
-    /<title[^>]*>([\s\S]*?)<\/title>/i
-  );
+  var url =
+    SITE +
+    '/search?s=' +
+    encodeURIComponent(q);
 
-  if (match) {
+  return fetchPage(url, SITE + '/')
+    .then(function (html) {
 
-    return cleanText(match[1])
-      .replace(/\s*[-|]\s*FlixLatam.*$/i, '')
-      .trim();
-  }
+      var results = [];
+      var seen = {};
 
-  return 'FlixLatam';
-}
+      var itemRe =
+        /<article[^>]*class=["'][^"']*\bitem\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/gi;
 
+      var match;
 
-function extractImage(html) {
+      while ((match = itemRe.exec(html)) !== null) {
 
-  var match;
+        var block = match[1];
 
-  match = html.match(
-    /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
-  );
+        var a =
+          block.match(
+            /<h3>\s*<a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h3>/i
+          );
 
-  if (match) {
-    return absUrl(match[1]);
-  }
+        if (!a) {
+          continue;
+        }
 
-  match = html.match(
-    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i
-  );
+        var href =
+          absoluteUrl(a[1]);
 
-  if (match) {
-    return absUrl(match[1]);
-  }
+        var title =
+          cleanText(a[2]);
 
-  match = html.match(
-    /<img[^>]+src=["']([^"']+)["']/i
-  );
+        if (!href || !title || seen[href]) {
+          continue;
+        }
 
-  if (match) {
-    return absUrl(match[1]);
-  }
+        var img =
+          block.match(
+            /<img[^>]+src=["']([^"']+)["']/i
+          );
 
-  return null;
+        var image =
+          img
+            ? absoluteUrl(img[1])
+            : '';
+
+        seen[href] = true;
+
+        results.push({
+          id: href,
+          title: title,
+          url: href,
+          cover: image,
+          type: 'anime',
+          sourceId: SOURCE_ID
+        });
+      }
+
+      return results;
+
+    })
+    .catch(function () {
+      return [];
+    });
 }
 
 
 // ============================================================
-// CARD PARSER
+// HOME / CATALOGO
 // ============================================================
 
-function parseCards(html) {
+function parseSearchCards(html) {
 
   var results = [];
   var seen = {};
 
-  /*
-   * FlixLatam:
-   *
-   * <article class="item">
-   *   ...
-   *   <h3>
-   *      <a href="...">Título</a>
-   *   </h3>
-   *   <img src="...">
-   * </article>
-   */
-
   var itemRe =
-    /<article\s+class=["']item["'][^>]*>([\s\S]*?)<\/article>/gi;
+    /<article[^>]*class=["'][^"']*\bitem\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/gi;
 
   var match;
 
@@ -205,64 +187,36 @@ function parseCards(html) {
 
     var block = match[1];
 
-    var link =
+    var a =
       block.match(
-        /<h3>\s*<a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h3>/i
+        /<h3[^>]*>\s*<a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h3>/i
       );
 
-    /*
-     * Fallback por si cambia ligeramente el HTML.
-     */
-
-    if (!link) {
-
-      link =
+    if (!a) {
+      a =
         block.match(
           /<a\s+href=["']([^"']+)["'][^>]*>[\s\S]*?<h[2-4][^>]*>([\s\S]*?)<\/h[2-4]>[\s\S]*?<\/a>/i
         );
     }
 
-    if (!link) {
+    if (!a) {
       continue;
     }
 
-    var href =
-      absUrl(link[1]);
-
-    var title =
-      decodeEntities(link[2]);
+    var href = absoluteUrl(a[1]);
+    var title = cleanText(a[2]);
 
     if (!href || !title || seen[href]) {
       continue;
     }
 
-
-    var imageMatch =
+    var img =
       block.match(
-        /<img[^>]+src=["']([^"']+)["']/i
+        /<img[^>]+(?:data-src|data-lazy-src|src)=["']([^"']+)["']/i
       );
 
-    if (!imageMatch) {
-
-      imageMatch =
-        block.match(
-          /<img[^>]+data-src=["']([^"']+)["']/i
-        );
-    }
-
-    if (!imageMatch) {
-
-      imageMatch =
-        block.match(
-          /<img[^>]+data-lazy-src=["']([^"']+)["']/i
-        );
-    }
-
     var image =
-      imageMatch
-        ? absUrl(imageMatch[1])
-        : null;
-
+      img ? absoluteUrl(img[1]) : '';
 
     seen[href] = true;
 
@@ -275,8 +229,7 @@ function parseCards(html) {
       sourceId: SOURCE_ID
     });
 
-
-    if (results.length >= 50) {
+    if (results.length >= 30) {
       break;
     }
   }
@@ -285,51 +238,24 @@ function parseCards(html) {
 }
 
 
-// ============================================================
-// SEARCH
-// ============================================================
-
-function search(query, page, options) {
-
-  var q =
-    String(query || '').trim();
-
-  if (!q) {
-    return Promise.resolve([]);
-  }
+function loadHomeSearch(query) {
 
   var url =
     SITE +
     '/search?s=' +
-    encodeURIComponent(q);
+    encodeURIComponent(query);
 
-  return request(url, SITE + '/')
+  return fetchPage(url, SITE + '/')
     .then(function (html) {
-
-      return parseCards(html);
-
+      return parseSearchCards(html);
     })
     .catch(function () {
-
       return [];
-
     });
 }
 
 
-// ============================================================
-// HOME / CATALOG
-// ============================================================
-
 function getHome(options) {
-
-  /*
-   * El módulo Sora no proporciona una portada
-   * independiente de FlixLatam.
-   *
-   * Para Zangetsu generamos el catálogo usando
-   * búsquedas públicas.
-   */
 
   var queries = [
     'a',
@@ -339,31 +265,9 @@ function getHome(options) {
     'u'
   ];
 
-
-  function load(query) {
-
-    var url =
-      SITE +
-      '/search?s=' +
-      encodeURIComponent(query);
-
-    return request(url, SITE + '/')
-      .then(function (html) {
-
-        return parseCards(html);
-
-      })
-      .catch(function () {
-
-        return [];
-
-      });
-  }
-
-
   return Promise.all(
-    queries.map(function (query) {
-      return load(query);
+    queries.map(function (q) {
+      return loadHomeSearch(q);
     })
   )
   .then(function (groups) {
@@ -373,24 +277,17 @@ function getHome(options) {
 
     for (var i = 0; i < groups.length; i++) {
 
-      var group =
-        groups[i];
+      var group = groups[i];
 
       for (var j = 0; j < group.length; j++) {
 
-        var item =
-          group[j];
+        var item = group[j];
 
-        if (!item || !item.url) {
-          continue;
-        }
-
-        if (seen[item.url]) {
+        if (!item || !item.url || seen[item.url]) {
           continue;
         }
 
         seen[item.url] = true;
-
         items.push(item);
 
         if (items.length >= 50) {
@@ -403,11 +300,9 @@ function getHome(options) {
       }
     }
 
-
     if (!items.length) {
       return [];
     }
-
 
     return [
       {
@@ -415,12 +310,9 @@ function getHome(options) {
         items: items
       }
     ];
-
   })
   .catch(function () {
-
     return [];
-
   });
 }
 
@@ -431,164 +323,143 @@ function getHome(options) {
 
 function getDetail(url, options) {
 
-  var pageUrl =
-    absUrl(url);
+  var pageUrl = absoluteUrl(url);
 
-  return request(
+  return fetchPage(
     pageUrl,
     SITE + '/'
   )
-    .then(function (html) {
+  .then(function (html) {
 
-      var title =
-        extractTitle(html);
+    var title = '';
 
-      var cover =
-        extractImage(html);
+    var h1 =
+      html.match(
+        /<h1[^>]*>([\s\S]*?)<\/h1>/i
+      );
 
+    if (h1) {
+      title = cleanText(h1[1]);
+    }
 
-      // --------------------------------------------------------
-      // DESCRIPTION
-      // --------------------------------------------------------
+    if (!title) {
 
-      var description = '';
-
-      var match =
+      var titleTag =
         html.match(
-          /<div[^>]*class=["'][^"']*entry[^"']*["'][^>]*>\s*<p[^>]*>([\s\S]*?)<\/p>/i
+          /<title[^>]*>([\s\S]*?)<\/title>/i
         );
 
-      if (match) {
-
-        description =
-          cleanText(match[1]);
+      if (titleTag) {
+        title = cleanText(titleTag[1]);
       }
+    }
 
 
-      if (!description) {
+    var image = '';
 
-        match =
-          html.match(
-            /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i
-          );
+    var ogImage =
+      html.match(
+        /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
+      );
 
-        if (match) {
+    if (ogImage) {
+      image = absoluteUrl(ogImage[1]);
+    }
 
-          description =
-            cleanText(match[1]);
+
+    var description = '';
+
+    var descriptionMeta =
+      html.match(
+        /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i
+      );
+
+    if (descriptionMeta) {
+      description =
+        cleanText(descriptionMeta[1]);
+    }
+
+
+    var ld =
+      html.match(
+        /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+      );
+
+    if (ld) {
+
+      for (var i = 0; i < ld.length; i++) {
+
+        try {
+
+          var raw =
+            ld[i]
+              .replace(/<script[^>]*>/i, '')
+              .replace(/<\/script>\s*$/i, '');
+
+          var data =
+            JSON.parse(raw);
+
+          if (data) {
+
+            if (!description && data.description) {
+              description =
+                cleanText(data.description);
+            }
+
+            if (!image && data.image) {
+
+              if (typeof data.image === 'string') {
+                image =
+                  absoluteUrl(data.image);
+              }
+            }
+
+            if (!title && data.name) {
+              title =
+                cleanText(data.name);
+            }
+          }
+
+        } catch (e) {
+          // JSON-LD inválido
         }
       }
+    }
 
 
-      // --------------------------------------------------------
-      // GENRES
-      // --------------------------------------------------------
+    return getEpisodes(pageUrl)
+      .then(function (episodes) {
 
-      var genres = [];
-      var genreSeen = {};
+        return {
+          id: pageUrl,
+          title: title || pageUrl,
+          url: pageUrl,
+          cover: image || null,
+          description: description,
+          type: 'anime',
+          sourceId: SOURCE_ID,
+          episodes: episodes,
+          subCount: episodes.length,
+          dubCount: 0
+        };
 
-      var genreRe =
-        /href=["'][^"']*\/genero\/[^"']+["'][^>]*>([^<]+)</gi;
+      });
 
-      var genreMatch;
+  })
+  .catch(function () {
 
-      while (
-        (genreMatch = genreRe.exec(html)) !== null
-      ) {
+    return {
+      id: pageUrl,
+      title: pageUrl,
+      url: pageUrl,
+      cover: null,
+      description: '',
+      type: 'anime',
+      sourceId: SOURCE_ID,
+      episodes: []
+    };
 
-        var genre =
-          cleanText(genreMatch[1]);
-
-        if (
-          genre &&
-          !genreSeen[genre]
-        ) {
-
-          genreSeen[genre] = true;
-
-          genres.push(genre);
-        }
-      }
-
-
-      // --------------------------------------------------------
-      // EPISODES
-      // --------------------------------------------------------
-
-      return getEpisodes(pageUrl)
-        .then(function (episodes) {
-
-          return {
-
-            id: pageUrl,
-
-            title:
-              title || 'FlixLatam',
-
-            url: pageUrl,
-
-            cover:
-              cover,
-
-            description:
-              description,
-
-            genres:
-              genres,
-
-            type:
-              'anime',
-
-            sourceId:
-              SOURCE_ID,
-
-            episodes:
-              episodes,
-
-            subCount:
-              episodes.length,
-
-            dubCount:
-              0
-
-          };
-
-        });
-
-    })
-    .catch(function () {
-
-      return {
-
-        id: pageUrl,
-
-        title:
-          pageUrl,
-
-        url:
-          pageUrl,
-
-        cover:
-          null,
-
-        description:
-          '',
-
-        genres:
-          [],
-
-        type:
-          'anime',
-
-        sourceId:
-          SOURCE_ID,
-
-        episodes:
-          []
-
-      };
-
-    });
+  });
 }
 
 
@@ -598,220 +469,69 @@ function getDetail(url, options) {
 
 function getEpisodes(url, options) {
 
-  var pageUrl =
-    absUrl(url);
+  var pageUrl = absoluteUrl(url);
 
-  return request(
+  return fetchPage(
     pageUrl,
     SITE + '/'
   )
-    .then(function (html) {
+  .then(function (html) {
 
-      var episodes = [];
-      var seen = {};
+    var episodes = [];
+    var seen = {};
 
-      /*
-       * Intentamos primero URLs de episodios
-       * con temporada/capítulo.
-       */
+    var epRe =
+      /href=["'](\/(?:serie|anime)\/[^"']*\/temporada\/(\d+)\/capitulo\/(\d+))["']/gi;
 
-      var patterns = [
+    var match;
 
-        /href=["']([^"']*\/temporada\/(\d+)\/capitulo\/(\d+)[^"']*)["']/gi,
+    while ((match = epRe.exec(html)) !== null) {
 
-        /href=["']([^"']*\/episodio[s]?\/(\d+)[^"']*)["']/gi,
+      var href =
+        absoluteUrl(match[1]);
 
-        /href=["']([^"']*\/capitulo\/(\d+)[^"']*)["']/gi
+      var season =
+        parseInt(match[2], 10);
 
-      ];
+      var number =
+        parseInt(match[3], 10);
 
-
-      // --------------------------------------------------------
-      // TEMPORADA / CAPÍTULO
-      // --------------------------------------------------------
-
-      var match =
-        patterns[0].exec(html);
-
-      while (match !== null) {
-
-        var href =
-          absUrl(match[1]);
-
-        var season =
-          parseInt(match[2], 10);
-
-        var number =
-          parseInt(match[3], 10);
-
-
-        if (
-          href &&
-          number &&
-          !seen[href]
-        ) {
-
-          seen[href] = true;
-
-          episodes.push({
-
-            id:
-              href,
-
-            number:
-              number,
-
-            title:
-              'Episodio ' + number,
-
-            url:
-              href,
-
-            season:
-              season || 1
-
-          });
-        }
-
-
-        match =
-          patterns[0].exec(html);
+      if (!href || !number || seen[href]) {
+        continue;
       }
 
+      seen[href] = true;
 
-      // --------------------------------------------------------
-      // FALLBACK: /episodio/
-      // --------------------------------------------------------
-
-      match =
-        patterns[1].exec(html);
-
-      while (match !== null) {
-
-        var href2 =
-          absUrl(match[1]);
-
-        var number2 =
-          parseInt(match[2], 10);
-
-
-        if (
-          href2 &&
-          number2 &&
-          !seen[href2]
-        ) {
-
-          seen[href2] = true;
-
-          episodes.push({
-
-            id:
-              href2,
-
-            number:
-              number2,
-
-            title:
-              'Episodio ' + number2,
-
-            url:
-              href2,
-
-            season:
-              1
-
-          });
-        }
-
-
-        match =
-          patterns[1].exec(html);
-      }
-
-
-      // --------------------------------------------------------
-      // FALLBACK: /capitulo/
-      // --------------------------------------------------------
-
-      match =
-        patterns[2].exec(html);
-
-      while (match !== null) {
-
-        var href3 =
-          absUrl(match[1]);
-
-        var number3 =
-          parseInt(match[2], 10);
-
-
-        if (
-          href3 &&
-          number3 &&
-          !seen[href3]
-        ) {
-
-          seen[href3] = true;
-
-          episodes.push({
-
-            id:
-              href3,
-
-            number:
-              number3,
-
-            title:
-              'Episodio ' + number3,
-
-            url:
-              href3,
-
-            season:
-              1
-
-          });
-        }
-
-
-        match =
-          patterns[2].exec(html);
-      }
-
-
-      // --------------------------------------------------------
-      // ORDEN
-      // --------------------------------------------------------
-
-      episodes.sort(function (a, b) {
-
-        if (
-          (a.season || 1) !==
-          (b.season || 1)
-        ) {
-
-          return (
-            (a.season || 1) -
-            (b.season || 1)
-          );
-        }
-
-        return (
-          (a.number || 0) -
-          (b.number || 0)
-        );
-
+      episodes.push({
+        id: href,
+        number: number,
+        title:
+          'Temporada ' +
+          season +
+          ' - Episodio ' +
+          number,
+        url: href,
+        season: season
       });
+    }
 
 
-      return episodes;
+    episodes.sort(function (a, b) {
 
-    })
-    .catch(function () {
+      if (a.season !== b.season) {
+        return a.season - b.season;
+      }
 
-      return [];
-
+      return a.number - b.number;
     });
+
+
+    return episodes;
+
+  })
+  .catch(function () {
+    return [];
+  });
 }
 
 
@@ -822,142 +542,88 @@ function getEpisodes(url, options) {
 function getVideoSources(episodeUrl, options) {
 
   var url =
-    absUrl(episodeUrl);
+    absoluteUrl(episodeUrl);
 
-  return request(
+  return fetchPage(
     url,
     SITE + '/'
   )
-    .then(function (html) {
+  .then(function (html) {
 
-      var sources = [];
-      var seen = {};
+    var sources = [];
+    var matches = [];
 
+    var regex =
+      /https?:\/\/[^"'\\\s<>]+\.m3u8(?:\?[^"'\\\s<>]*)?/gi;
 
-      // --------------------------------------------------------
-      // .M3U8 DIRECTO
-      // --------------------------------------------------------
+    var match;
 
-      var m3u8Re =
-        /https?:\/\/[^"'\\\s<>]+\.m3u8(?:\?[^"'\\\s<>]*)?/gi;
+    while ((match = regex.exec(html)) !== null) {
 
-      var match;
+      var stream =
+        match[0];
 
-      while (
-        (match = m3u8Re.exec(html)) !== null
-      ) {
-
-        var stream =
-          match[0];
-
-        if (seen[stream]) {
-          continue;
-        }
-
-        seen[stream] = true;
-
-        sources.push({
-
-          url:
-            stream,
-
-          quality:
-            '1080p',
-
-          container:
-            'hls',
-
-          headers: {
-
-            'User-Agent':
-              UA,
-
-            'Referer':
-              url
-
-          },
-
-          kind:
-            'sub',
-
-          audioLang:
-            'es',
-
-          subtitles:
-            []
-
-        });
+      if (matches.indexOf(stream) !== -1) {
+        continue;
       }
 
+      matches.push(stream);
 
-      // --------------------------------------------------------
-      // src/file/source = M3U8
-      // --------------------------------------------------------
+      sources.push({
+        url: stream,
+        quality: '1080p',
+        container: 'hls',
+        headers: {
+          'User-Agent': UA,
+          'Referer': url
+        },
+        kind: 'sub',
+        audioLang: 'es',
+        subtitles: []
+      });
+    }
 
-      var sourceRe =
-        /(?:src|file|source)\s*[:=]\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/gi;
 
+    var srcRegex =
+      /(?:src|file|source)\s*[:=]\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/gi;
 
-      while (
-        (match = sourceRe.exec(html)) !== null
-      ) {
+    while ((match = srcRegex.exec(html)) !== null) {
 
-        var stream2 =
-          match[1];
+      var stream2 =
+        match[1];
 
-        if (seen[stream2]) {
-          continue;
-        }
-
-        seen[stream2] = true;
-
-        sources.push({
-
-          url:
-            stream2,
-
-          quality:
-            '1080p',
-
-          container:
-            'hls',
-
-          headers: {
-
-            'User-Agent':
-              UA,
-
-            'Referer':
-              url
-
-          },
-
-          kind:
-            'sub',
-
-          audioLang:
-            'es',
-
-          subtitles:
-            []
-
-        });
+      if (matches.indexOf(stream2) !== -1) {
+        continue;
       }
 
+      matches.push(stream2);
 
-      return sources;
+      sources.push({
+        url: stream2,
+        quality: '1080p',
+        container: 'hls',
+        headers: {
+          'User-Agent': UA,
+          'Referer': url
+        },
+        kind: 'sub',
+        audioLang: 'es',
+        subtitles: []
+      });
+    }
 
-    })
-    .catch(function () {
 
-      return [];
+    return sources;
 
-    });
+  })
+  .catch(function () {
+    return [];
+  });
 }
 
 
 // ============================================================
-// COMPATIBILITY
+// COMPATIBILIDAD
 // ============================================================
 
 function getVideoSource(url, options) {
