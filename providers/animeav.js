@@ -1,49 +1,39 @@
-// AnimeAV1 — Zangetsu Provider
-// https://animeav1.com/
+// FlixLatam — Zangetsu Provider
+// https://flixlatam.com/
 //
-// Flujo:
-//   /catalogo?search=       -> búsqueda
-//   /media/<slug>           -> información + episodios
-//   /media/<slug>/<ep>      -> reproductor
-//   player.zilla-networks.com/play/... -> /m3u8/...
-//
-// Fuente del funcionamiento:
-// AnimeAV1 + módulo Sora que compartiste como referencia.
-// Este archivo está adaptado al formato de providers de Zangetsu.
+// Adaptado desde el módulo Sora de FlixLatam.
+// No incluye la resolución de embeds protegidos mediante PoW/AES/Altcha.
 
-var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
-  ? String(__SOURCE_ID)
-  : 'animeav1';
-
-var SITE = 'https://animeav1.com';
+var SITE = 'https://flixlatam.com';
+var SOURCE_ID = 'flixlatam';
 
 var UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
   'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-  'Chrome/124.0 Safari/537.36';
+  'Chrome/137.0.0.0 Safari/537.36';
 
 
-// ─────────────────────────────────────────────
+// ============================================================
 // INFO
-// ─────────────────────────────────────────────
+// ============================================================
 
 function getInfo() {
   return {
-    name: 'AnimeAV1',
+    name: 'FlixLatam',
     lang: 'es',
     baseUrl: SITE,
-    logo: SITE + '/favicon.png',
+    logo: SITE + '/themes/dooplay/assets/img/favicon.png',
     type: 'anime',
-    version: '1.0.1'
+    version: '1.0.0'
   };
 }
 
 
-// ─────────────────────────────────────────────
+// ============================================================
 // HTTP
-// ─────────────────────────────────────────────
+// ============================================================
 
-function request(url, referer) {
+function fetchPage(url, referer) {
   return fetch(url, {
     headers: {
       'User-Agent': UA,
@@ -55,28 +45,28 @@ function request(url, referer) {
 }
 
 
-// ─────────────────────────────────────────────
+// ============================================================
 // HELPERS
-// ─────────────────────────────────────────────
+// ============================================================
 
-function absUrl(url) {
-  if (!url) return null;
+function absoluteUrl(url) {
+  if (!url) return '';
 
   url = String(url).trim();
-
-  if (url.indexOf('//') === 0) {
-    return 'https:' + url;
-  }
 
   if (/^https?:\/\//i.test(url)) {
     return url;
   }
 
-  if (url.charAt(0) === '/') {
-    return SITE + url;
+  if (/^\/\//.test(url)) {
+    return 'https:' + url;
   }
 
-  return SITE + '/' + url;
+  return SITE + (
+    url.charAt(0) === '/'
+      ? url
+      : '/' + url
+  );
 }
 
 
@@ -86,72 +76,20 @@ function cleanText(text) {
   return String(text)
     .replace(/<br\s*\/?>/gi, ' ')
     .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#039;/gi, "'")
+    .replace(/&apos;/gi, "'")
     .replace(/&amp;/gi, '&')
     .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&#x27;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 
-function decodeEntities(text) {
-  return cleanText(text);
-}
-
-
-function extractTitle(html) {
-  var match;
-
-  match = html.match(
-    /<h1[^>]*>([\s\S]*?)<\/h1>/i
-  );
-
-  if (match) {
-    return cleanText(match[1]);
-  }
-
-  match = html.match(
-    /<title[^>]*>([\s\S]*?)<\/title>/i
-  );
-
-  if (match) {
-    return cleanText(match[1])
-      .replace(/\s*[-|]\s*AnimeAV1.*$/i, '')
-      .trim();
-  }
-
-  return 'Anime';
-}
-
-
-function extractImage(html) {
-  var match;
-
-  match = html.match(
-    /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
-  );
-
-  if (match) {
-    return absUrl(match[1]);
-  }
-
-  match = html.match(
-    /<img[^>]+src=["']([^"']+)["']/i
-  );
-
-  if (match) {
-    return absUrl(match[1]);
-  }
-
-  return null;
-}
-
-
-// ─────────────────────────────────────────────
+// ============================================================
 // SEARCH
-// ─────────────────────────────────────────────
+// ============================================================
 
 function search(query, page, options) {
 
@@ -163,93 +101,61 @@ function search(query, page, options) {
 
   var url =
     SITE +
-    '/catalogo?search=' +
+    '/search?s=' +
     encodeURIComponent(q);
 
-  return request(url, SITE + '/')
+  return fetchPage(url, SITE + '/')
     .then(function (html) {
 
       var results = [];
       var seen = {};
 
       /*
-       * AnimeAV1 usa tarjetas similares a:
+       * Basado en el módulo original:
        *
-       * <article class="group/item">
+       * <article class="item">
+       *   <h3><a href="...">Título</a></h3>
        *   <img src="...">
-       *   <h3 class="...text-lead...">Naruto</h3>
-       *   <a href="/media/naruto">
+       * </article>
        */
 
-      var regex =
-        /<article[^>]*class=["'][^"']*group\/item[^"']*["'][^>]*>[\s\S]*?<\/article>/gi;
+      var itemRe =
+        /<article\s+class=["']item["'][^>]*>([\s\S]*?)<\/article>/gi;
 
       var match;
 
-      while ((match = regex.exec(html)) !== null) {
+      while ((match = itemRe.exec(html)) !== null) {
 
-        var card = match[0];
+        var block = match[1];
 
-        var hrefMatch =
-          card.match(
-            /<a[^>]+href=["']([^"']+)["']/i
+        var a =
+          block.match(
+            /<h3>\s*<a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h3>/i
           );
 
-        if (!hrefMatch) {
+        if (!a) {
           continue;
         }
 
-        var href = absUrl(hrefMatch[1]);
+        var href =
+          absoluteUrl(a[1]);
 
-        if (!href || seen[href]) {
+        var title =
+          cleanText(a[2]);
+
+        if (!href || !title || seen[href]) {
           continue;
         }
 
-        /*
-         * Primero buscamos la imagen.
-         */
-        var imageMatch =
-          card.match(
+        var img =
+          block.match(
             /<img[^>]+src=["']([^"']+)["']/i
           );
 
-        if (!imageMatch) {
-          imageMatch =
-            card.match(
-              /<img[^>]+data-src=["']([^"']+)["']/i
-            );
-        }
-
         var image =
-          imageMatch
-            ? absUrl(imageMatch[1])
-            : null;
-
-        /*
-         * Título.
-         */
-        var titleMatch =
-          card.match(
-            /<h3[^>]*class=["'][^"']*text-lead[^"']*["'][^>]*>([\s\S]*?)<\/h3>/i
-          );
-
-        if (!titleMatch) {
-          titleMatch =
-            card.match(
-              /<h[2-4][^>]*>([\s\S]*?)<\/h[2-4]>/i
-            );
-        }
-
-        if (!titleMatch) {
-          continue;
-        }
-
-        var title =
-          decodeEntities(titleMatch[1]);
-
-        if (!title) {
-          continue;
-        }
+          img
+            ? absoluteUrl(img[1])
+            : '';
 
         seen[href] = true;
 
@@ -272,456 +178,422 @@ function search(query, page, options) {
 }
 
 
-// ─────────────────────────────────────────────
+// ============================================================
 // HOME
-// ─────────────────────────────────────────────
+// ============================================================
 
 function getHome(options) {
 
-  return request(
-    SITE + '/catalogo',
+  return fetchPage(
+    SITE + '/',
     SITE + '/'
   )
-    .then(function (html) {
+  .then(function (html) {
 
-      var rows = [];
+    var items = [];
+    var seen = {};
 
-      /*
-       * AnimeAV1 puede cambiar el HTML de la página.
-       * Por eso buscamos tarjetas de forma genérica.
-       */
+    var itemRe =
+      /<article\s+class=["']item["'][^>]*>([\s\S]*?)<\/article>/gi;
 
-      var regex =
-        /<article[^>]*class=["'][^"']*group\/item[^"']*["'][^>]*>[\s\S]*?<\/article>/gi;
+    var match;
 
-      var match;
-      var items = [];
-      var seen = {};
+    while ((match = itemRe.exec(html)) !== null) {
 
-      while ((match = regex.exec(html)) !== null) {
+      var block = match[1];
 
-        var card = match[0];
+      var a =
+        block.match(
+          /<h3>\s*<a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h3>/i
+        );
 
-        var hrefMatch =
-          card.match(
-            /<a[^>]+href=["']([^"']+)["']/i
-          );
-
-        if (!hrefMatch) {
-          continue;
-        }
-
-        var href = absUrl(hrefMatch[1]);
-
-        if (!href || seen[href]) {
-          continue;
-        }
-
-        var titleMatch =
-          card.match(
-            /<h3[^>]*>([\s\S]*?)<\/h3>/i
-          );
-
-        if (!titleMatch) {
-          continue;
-        }
-
-        var title =
-          decodeEntities(titleMatch[1]);
-
-        if (!title) {
-          continue;
-        }
-
-        var imageMatch =
-          card.match(
-            /<img[^>]+src=["']([^"']+)["']/i
-          );
-
-        if (!imageMatch) {
-          imageMatch =
-            card.match(
-              /<img[^>]+data-src=["']([^"']+)["']/i
-            );
-        }
-
-        var image =
-          imageMatch
-            ? absUrl(imageMatch[1])
-            : null;
-
-        seen[href] = true;
-
-        items.push({
-          id: href,
-          title: title,
-          url: href,
-          cover: image,
-          type: 'anime',
-          sourceId: SOURCE_ID
-        });
-
-        if (items.length >= 30) {
-          break;
-        }
+      if (!a) {
+        continue;
       }
 
-      if (items.length) {
-        rows.push({
-          title: 'AnimeAV1',
-          items: items
-        });
+      var href =
+        absoluteUrl(a[1]);
+
+      var title =
+        cleanText(a[2]);
+
+      if (!href || !title || seen[href]) {
+        continue;
       }
 
-      return rows;
+      var img =
+        block.match(
+          /<img[^>]+src=["']([^"']+)["']/i
+        );
 
-    })
-    .catch(function () {
+      var image =
+        img
+          ? absoluteUrl(img[1])
+          : '';
+
+      seen[href] = true;
+
+      items.push({
+        id: href,
+        title: title,
+        url: href,
+        cover: image,
+        type: 'anime',
+        sourceId: SOURCE_ID
+      });
+
+      if (items.length >= 30) {
+        break;
+      }
+    }
+
+    if (!items.length) {
       return [];
-    });
+    }
+
+    return [
+      {
+        title: 'FlixLatam',
+        items: items
+      }
+    ];
+
+  })
+  .catch(function () {
+    return [];
+  });
 }
 
 
-// ─────────────────────────────────────────────
+// ============================================================
 // DETAIL
-// ─────────────────────────────────────────────
+// ============================================================
 
 function getDetail(url, options) {
 
-  var pageUrl = String(url);
+  var pageUrl = absoluteUrl(url);
 
-  return request(
+  return fetchPage(
     pageUrl,
     SITE + '/'
   )
-    .then(function (html) {
+  .then(function (html) {
 
-      var title =
-        extractTitle(html);
+    var title = '';
 
-      var cover =
-        extractImage(html);
+    var h1 =
+      html.match(
+        /<h1[^>]*>([\s\S]*?)<\/h1>/i
+      );
 
-      /*
-       * Descripción.
-       *
-       * AnimeAV1 utiliza un bloque entry.
-       */
-      var description = '';
+    if (h1) {
+      title = cleanText(h1[1]);
+    }
 
-      var descriptionMatch =
+    if (!title) {
+
+      var titleTag =
         html.match(
-          /<div[^>]*class=["'][^"']*entry[^"']*["'][^>]*>\s*<p[^>]*>([\s\S]*?)<\/p>/i
+          /<title[^>]*>([\s\S]*?)<\/title>/i
         );
 
-      if (descriptionMatch) {
-        description =
-          cleanText(descriptionMatch[1]);
+      if (titleTag) {
+        title = cleanText(titleTag[1]);
       }
+    }
 
-      if (!description) {
 
-        descriptionMatch =
-          html.match(
-            /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i
-          );
+    var image = '';
 
-        if (descriptionMatch) {
-          description =
-            cleanText(descriptionMatch[1]);
+    var ogImage =
+      html.match(
+        /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
+      );
+
+    if (ogImage) {
+      image = absoluteUrl(ogImage[1]);
+    }
+
+
+    var description = '';
+
+    var descriptionMeta =
+      html.match(
+        /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i
+      );
+
+    if (descriptionMeta) {
+      description =
+        cleanText(descriptionMeta[1]);
+    }
+
+
+    /*
+     * Intentamos JSON-LD, igual que el módulo original.
+     */
+
+    var ld =
+      html.match(
+        /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+      );
+
+    if (ld) {
+
+      for (var i = 0; i < ld.length; i++) {
+
+        try {
+
+          var raw =
+            ld[i]
+              .replace(/<script[^>]*>/i, '')
+              .replace(/<\/script>\s*$/i, '');
+
+          var data =
+            JSON.parse(raw);
+
+          if (data) {
+
+            if (!description && data.description) {
+              description =
+                cleanText(data.description);
+            }
+
+            if (!image && data.image) {
+
+              if (typeof data.image === 'string') {
+                image =
+                  absoluteUrl(data.image);
+              }
+            }
+
+            if (!title && data.name) {
+              title =
+                cleanText(data.name);
+            }
+          }
+
+        } catch (e) {
+          // JSON-LD inválido: continuar
         }
       }
+    }
 
 
-      /*
-       * Géneros.
-       */
-      var genres = [];
+    return getEpisodes(pageUrl)
+      .then(function (episodes) {
 
-      var genreRegex =
-        /href=["'][^"']*\/genero\/[^"']+["'][^>]*>([^<]+)</gi;
+        return {
+          id: pageUrl,
+          title: title || pageUrl,
+          url: pageUrl,
+          cover: image || null,
+          description: description,
+          type: 'anime',
+          sourceId: SOURCE_ID,
+          episodes: episodes,
+          subCount: episodes.length,
+          dubCount: 0
+        };
 
-      var genreMatch;
+      });
 
-      while (
-        (genreMatch = genreRegex.exec(html)) !== null &&
-        genres.length < 10
-      ) {
+  })
+  .catch(function () {
 
-        var genre =
-          cleanText(genreMatch[1]);
+    return {
+      id: pageUrl,
+      title: pageUrl,
+      url: pageUrl,
+      cover: null,
+      description: '',
+      type: 'anime',
+      sourceId: SOURCE_ID,
+      episodes: []
+    };
 
-        if (
-          genre &&
-          genres.indexOf(genre) === -1
-        ) {
-          genres.push(genre);
-        }
-      }
-
-
-      return {
-        id: pageUrl,
-        title: title,
-        url: pageUrl,
-        cover: cover,
-        description: description,
-        genres: genres,
-        type: 'anime',
-        sourceId: SOURCE_ID,
-        episodes: []
-      };
-
-    });
-
+  });
 }
 
 
-// ─────────────────────────────────────────────
+// ============================================================
 // EPISODES
-// ─────────────────────────────────────────────
+// ============================================================
 
 function getEpisodes(url, options) {
 
-  var pageUrl = String(url);
+  var pageUrl = absoluteUrl(url);
 
-  return request(
+  return fetchPage(
     pageUrl,
     SITE + '/'
   )
-    .then(function (html) {
+  .then(function (html) {
 
-      var episodes = [];
-      var seen = {};
+    var episodes = [];
+    var seen = {};
 
-      /*
-       * El módulo que encontraste para AnimeAV1
-       * encontró episodios con:
-       *
-       * <a href=".../1">
-       *   <span class="sr-only">
-       *
-       * Por eso buscamos ese patrón.
-       */
+    /*
+     * Formato observado en el módulo original:
+     *
+     * /serie/<slug>/temporada/<season>/capitulo/<episode>
+     * /anime/<slug>/temporada/<season>/capitulo/<episode>
+     */
 
-      var regex =
-        /<a[^>]+href=["']([^"']+\/(\d+))["'][^>]*>[\s\S]*?<span[^>]*class=["'][^"']*sr-only[^"']*["'][^>]*>/gi;
+    var epRe =
+      /href=["'](\/(?:serie|anime)\/[^"']*\/temporada\/(\d+)\/capitulo\/(\d+))["']/gi;
 
-      var match;
+    var match;
 
-      while ((match = regex.exec(html)) !== null) {
+    while ((match = epRe.exec(html)) !== null) {
 
-        var href =
-          absUrl(match[1]);
+      var href =
+        absoluteUrl(match[1]);
 
-        var number =
-          parseInt(match[2], 10);
+      var season =
+        parseInt(match[2], 10);
 
-        if (!href || isNaN(number)) {
-          continue;
-        }
+      var number =
+        parseInt(match[3], 10);
 
-        if (seen[href]) {
-          continue;
-        }
-
-        seen[href] = true;
-
-        episodes.push({
-          id: href,
-          number: number,
-          title: 'Episode ' + number,
-          url: href
-        });
+      if (!href || !number || seen[href]) {
+        continue;
       }
 
+      seen[href] = true;
 
-      /*
-       * Si el HTML cambió ligeramente,
-       * hacemos un segundo intento.
-       */
-
-      if (!episodes.length) {
-
-        var fallback =
-          /<a[^>]+href=["']([^"']+\/(\d+))["'][^>]*>/gi;
-
-        while ((match = fallback.exec(html)) !== null) {
-
-          var href2 =
-            absUrl(match[1]);
-
-          var number2 =
-            parseInt(match[2], 10);
-
-          if (!href2 || isNaN(number2)) {
-            continue;
-          }
-
-          if (seen[href2]) {
-            continue;
-          }
-
-          seen[href2] = true;
-
-          episodes.push({
-            id: href2,
-            number: number2,
-            title: 'Episode ' + number2,
-            url: href2
-          });
-        }
-      }
-
-
-      /*
-       * Orden numérico.
-       */
-      episodes.sort(function (a, b) {
-        return a.number - b.number;
+      episodes.push({
+        id: href,
+        number: number,
+        title:
+          'Temporada ' +
+          season +
+          ' - Episodio ' +
+          number,
+        url: href,
+        season: season
       });
-
-      return episodes;
-
-    })
-    .catch(function () {
-      return [];
-    });
-}
+    }
 
 
-// ─────────────────────────────────────────────
-// DETAIL + EPISODES
-// ─────────────────────────────────────────────
+    episodes.sort(function (a, b) {
 
-function getDetailWithEpisodes(url, options) {
+      if (a.season !== b.season) {
+        return a.season - b.season;
+      }
 
-  return getDetail(url, options)
-    .then(function (detail) {
-
-      return getEpisodes(url, options)
-        .then(function (episodes) {
-
-          detail.episodes = episodes;
-
-          detail.subCount =
-            episodes.length;
-
-          detail.dubCount = 0;
-
-          return detail;
-        });
-
+      return a.number - b.number;
     });
 
+
+    return episodes;
+
+  })
+  .catch(function () {
+    return [];
+  });
 }
 
 
-// ─────────────────────────────────────────────
-// VIDEO SOURCE
-// ─────────────────────────────────────────────
+// ============================================================
+// VIDEO SOURCES
+// ============================================================
 
-function getVideoSources(episodeUrl) {
+function getVideoSources(episodeUrl, options) {
 
-  return extractStreamUrl(
-    String(episodeUrl)
-  );
+  var url =
+    absoluteUrl(episodeUrl);
 
-}
-
-
-// ─────────────────────────────────────────────
-// EXTRACT STREAM
-// ─────────────────────────────────────────────
-
-function extractStreamUrl(url) {
-
-  return request(
+  return fetchPage(
     url,
     SITE + '/'
   )
-    .then(function (html) {
+  .then(function (html) {
 
-      /*
-       * AnimeAV1:
-       *
-       * url:"https://player.zilla-networks.com/play/..."
-       *
-       * El módulo Sora que encontraste hacía:
-       *
-       * /play/  -> /m3u8/
-       */
+    var sources = [];
 
-      var match =
-        html.match(
-          /url\s*:\s*["'](https:\/\/player\.zilla-networks\.com\/play\/[^"']+)["']/i
-        );
+    /*
+     * Fuente HLS directamente expuesta en la página.
+     *
+     * NO intentamos descifrar ni superar el sistema protegido
+     * de los embeds vidurl.
+     */
 
-      if (!match) {
+    var matches = [];
 
-        /*
-         * Segundo formato posible:
-         *
-         * url = "..."
-         */
-        match =
-          html.match(
-            /url\s*=\s*["'](https:\/\/player\.zilla-networks\.com\/play\/[^"']+)["']/i
-          );
+    var regex =
+      /https?:\/\/[^"'\\\s<>]+\.m3u8(?:\?[^"'\\\s<>]*)?/gi;
+
+    var match;
+
+    while ((match = regex.exec(html)) !== null) {
+
+      var stream =
+        match[0];
+
+      if (matches.indexOf(stream) !== -1) {
+        continue;
       }
 
-      if (!match) {
+      matches.push(stream);
 
-        /*
-         * Último intento:
-         * buscar directamente cualquier URL Zilla.
-         */
-        match =
-          html.match(
-            /(https:\/\/player\.zilla-networks\.com\/play\/[^"'\\]+)/i
-          );
-      }
+      sources.push({
+        url: stream,
+        quality: '1080p',
+        container: 'hls',
+        headers: {
+          'User-Agent': UA,
+          'Referer': url
+        },
+        kind: 'sub',
+        audioLang: 'es',
+        subtitles: []
+      });
+    }
 
-      if (!match) {
-        throw new Error(
-          'AnimeAV1: no se encontró el player Zilla'
-        );
-      }
 
-      var playerUrl =
+    /*
+     * Algunos reproductores usan src="...m3u8".
+     */
+
+    var srcRegex =
+      /(?:src|file|source)\s*[:=]\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/gi;
+
+    while ((match = srcRegex.exec(html)) !== null) {
+
+      var stream2 =
         match[1];
 
-      var streamUrl =
-        playerUrl.replace(
-          '/play/',
-          '/m3u8/'
-        );
+      if (matches.indexOf(stream2) !== -1) {
+        continue;
+      }
+
+      matches.push(stream2);
+
+      sources.push({
+        url: stream2,
+        quality: '1080p',
+        container: 'hls',
+        headers: {
+          'User-Agent': UA,
+          'Referer': url
+        },
+        kind: 'sub',
+        audioLang: 'es',
+        subtitles: []
+      });
+    }
 
 
-      return [
-        {
-          url: streamUrl,
-          quality: '1080p',
-          container: 'hls',
-          headers: {
-            'User-Agent': UA,
-            'Referer': SITE + '/'
-          },
-          kind: 'sub',
-          audioLang: 'ja',
-          subtitles: []
-        }
-      ];
+    return sources;
 
-    });
-
+  })
+  .catch(function () {
+    return [];
+  });
 }
 
 
-// ─────────────────────────────────────────────
-// ALIAS PARA COMPATIBILIDAD
-// ─────────────────────────────────────────────
-
+// Compatibilidad
 function getVideoSource(url, options) {
   return getVideoSources(url, options);
 }
